@@ -1,4 +1,4 @@
 streamlit
 pandas
-spacy==3.8.2
-https://github.com/explosion/spacy-models/releases/download/pl_core_news_sm-3.8.0/pl_core_news_sm-3.8.0-py3-none-any.whl
+spacy
+https://huggingface.co/spacy/pl_core_news_sm/resolve/main/pl_core_news_sm-any-py3-none-any.whl
