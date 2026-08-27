@@ -1,4 +1,6 @@
 streamlit
 pandas
 spacy
+openpyxl
 https://huggingface.co/spacy/pl_core_news_sm/resolve/main/pl_core_news_sm-any-py3-none-any.whl
+https://huggingface.co/spacy/en_core_web_sm/resolve/main/en_core_web_sm-any-py3-none-any.whl
