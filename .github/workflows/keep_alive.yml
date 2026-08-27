@@ -1,0 +1,15 @@
+name: Keep Streamlit Alive
+
+on:
+  schedule:
+    # Uruchamia się automatycznie co 12 godzin
+    - cron: '0 */12 * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Streamlit App
+        run: |
+          curl -s https://korpusdoktorat-mnc7cc5zjkirzrt7sftqpl.streamlit.app/ > /dev/null
