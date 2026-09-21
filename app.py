@@ -6,6 +6,7 @@ import spacy
 import streamlit as st
 from supabase import Client, create_client
 from langdetect import detect
+import docx  # Make sure 'python-docx' is in your requirements.txt
 
 # 1. KONFIGURACJA STRONY
 st.set_page_config(
@@ -30,18 +31,23 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# 2. POŁĄCZENIE Z SUPABASE
-SUPABASE_URL = st.secrets.get("SUPABASE_URL", "https://odutcrcbnoqdepecaxom.supabase.co")
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "sb_publishable_Hf3FSHMO6chNpVgwWUooaA_i0g5oVnc")
+# 2. POŁĄCZENIE Z SUPABASE (Z BEZPIECZNA OBSŁUGĄ BŁĘDÓW)
+SUPABASE_URL = st.secrets.get("SUPABASE_URL", None)
+SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", None)
 
 @st.cache_resource
 def init_supabase() -> Client:
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    try:
+        return create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception:
+        return None
 
 supabase = init_supabase()
 BUCKET_NAME = "corpus-files"
 
-# 3. ŁADOWANIE MODELI NLP (JEDNOCZEŚNIE OBA JĘZYKI)
+# 3. ŁADOWANIE MODELI NLP
 @st.cache_resource
 def load_nlp_models():
     return {
@@ -51,7 +57,6 @@ def load_nlp_models():
 
 nlp_models = load_nlp_models()
 
-# DwuJęzyczny Słownik Przesady
 HYPERBOLE_DICTIONARY = {
     "Angielski 🇺🇸🇬🇧": [
         "obsessed", "holy grail", "literally", "life-changing", "game-changer", 
@@ -65,13 +70,29 @@ HYPERBOLE_DICTIONARY = {
     ]
 }
 
-# HELPERY CHMURY
-def upload_to_cloud(file_bytes, folder: str, filename: str):
-    path = f"{folder}/{filename}"
+# HELPERY CONVERTING AND CLOUD
+def extract_text_from_file(file) -> str:
+    """Konwertuje pliki .txt i .docx na czysty tekst."""
+    if file.name.endswith(".docx"):
+        doc = docx.Document(file)
+        return "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+    else:
+        return file.getvalue().decode("utf-8", errors="ignore")
+
+def upload_to_cloud(file_bytes: bytes, folder: str, filename: str):
+    if not supabase:
+        st.sidebar.error("Supabase nie jest połączony! Sprawdź Secrets.")
+        return
+    
+    # Save .docx as .txt in Supabase for consistent reading
+    clean_filename = filename.rsplit('.', 1)[0] + ".txt"
+    path = f"{folder}/{clean_filename}"
+    
     try:
         supabase.storage.from_(BUCKET_NAME).remove([path])
     except Exception:
         pass
+        
     supabase.storage.from_(BUCKET_NAME).upload(
         path=path,
         file=file_bytes,
@@ -81,6 +102,8 @@ def upload_to_cloud(file_bytes, folder: str, filename: str):
 @st.cache_data(ttl=60)
 def load_cloud_corpora(folder: str):
     texts = {}
+    if not supabase:
+        return texts
     try:
         files = supabase.storage.from_(BUCKET_NAME).list(folder)
         for f in files:
@@ -88,14 +111,14 @@ def load_cloud_corpora(folder: str):
             if name.endswith(".txt"):
                 file_path = f"{folder}/{name}"
                 res = supabase.storage.from_(BUCKET_NAME).download(file_path)
-                texts[name] = res.decode("utf-8")
+                texts[name] = res.decode("utf-8", errors="ignore")
     except Exception as e:
-        st.sidebar.error(f"Błąd pobierania danych: {e}")
+        st.sidebar.error(f"Nie można połączyć z bazą Supabase. Sprawdź URL w Secrets. ({e})")
     return texts
 
 def detect_language(text):
     try:
-        lang = detect(text[:1000]) # Detekcja na podstawie pierwszych 1000 znaków
+        lang = detect(text[:1000])
         return "pl" if lang == "pl" else "en"
     except Exception:
         return "en"
@@ -117,15 +140,20 @@ st.sidebar.markdown("### 📥 Import Danych (Chmura)")
 corpus_type = st.sidebar.radio("Wybierz typ korpusu:", ["Mikrokorpus", "Makrokorpus"])
 
 uploaded_files = st.sidebar.file_uploader(
-    "Wgraj transkrypcje (.txt):", 
-    type=["txt"], 
+    "Wgraj transkrypcje (.txt, .docx):", 
+    type=["txt", "docx"], 
     accept_multiple_files=True
 )
 
 if uploaded_files:
     target_folder = "dane_mikro" if corpus_type == "Mikrokorpus" else "dane_makro"
     for file in uploaded_files:
-        upload_to_cloud(file.getvalue(), target_folder, file.name)
+        try:
+            text_content = extract_text_from_file(file)
+            upload_to_cloud(text_content.encode("utf-8"), target_folder, file.name)
+        except Exception as e:
+            st.sidebar.error(f"Błąd przetwarzania pliku {file.name}: {e}")
+            
     st.sidebar.success(f"Zapisano {len(uploaded_files)} plik(ów) w chmurze!")
     st.cache_data.clear()
 
@@ -145,11 +173,11 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📂 Pliki Korpusu"
 ])
 
-# 1. KWIC (Przeszukuje oba języki jednocześnie)
+# 1. KWIC
 with tab1:
     st.markdown(f"#### Wyszukiwarka konkordancji (PL + EN) — **{active_corpus}**")
     if not target_data:
-        st.info("Baza danych jest pusta. Wgraj pliki .txt w panelu bocznym.")
+        st.info("Baza danych jest pusta. Wgraj pliki .txt lub .docx w panelu bocznym.")
     else:
         col1, col2 = st.columns([3, 1])
         with col1:
@@ -183,7 +211,7 @@ with tab1:
             else:
                 st.warning("Brak wyników.")
 
-# 2. SŁOWNIK PRZESADY (Porównanie PL i EN na jednym ekranie)
+# 2. SŁOWNIK PRZESADY
 with tab2:
     st.markdown("#### Jednoczesna Analiza Wyolbrzymień i Perswazji (PL & EN)")
     if not target_data:
@@ -229,7 +257,7 @@ with tab3:
     else:
         st.info("Baza danych jest pusta.")
 
-# 4. LEMATYZACJA AUTOMATYCZNA (Model dopasowuje się sam do języka pliku)
+# 4. LEMATYZACJA AUTOMATYCZNA
 with tab4:
     st.markdown("#### Automatyczna Lematyzacja NLP")
     if target_data:
